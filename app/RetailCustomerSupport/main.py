@@ -1,165 +1,118 @@
-from typing import Any
-from collections import OrderedDict
 from strands import Agent, tool
-import asyncio
-from strands.agent.conversation_manager.null_conversation_manager import NullConversationManager
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from model.load import load_model
 from mcp_client.client import get_streamable_http_mcp_client
+from memory.session import get_memory_session_manager
 
 app = BedrockAgentCoreApp()
 log = app.logger
 
-# Define a Streamable HTTP MCP Client
+# Exa AI MCP client for web search
 mcp_clients = [get_streamable_http_mcp_client()]
 
-DEFAULT_SYSTEM_PROMPT = """
-You are a helpful assistant. Use tools when appropriate.
+SYSTEM_PROMPT="""You are a helpful and professional customer support assistant for an e-commerce company.
+Your role is to:
+- Provide accurate information using the tools available to you
+- Be friendly, patient, and understanding with customers
+- Always offer additional help after answering questions
+- If you can't help with something, direct customers to the appropriate contact
 
-"""
+You have access to tools for looking up return policies, searching product information, and more.
+Additional tools may be available at runtime — always check your full tool list and use the most appropriate tool for each customer request.
+Always use tools to get accurate, up-to-date information rather than guessing."""
 
+# --- Customer Support Tools ---
 
-# Define a collection of tools used by the model
-tools = []
+RETURN_POLICIES = {
+    "electronics": {"window": "30 days", "condition": "Original packaging required, must be unused or defective", "refund": "Full refund to original payment method"},
+    "accessories": {"window": "14 days", "condition": "Must be in original packaging, unused", "refund": "Store credit or exchange"},
+    "audio": {"window": "30 days", "condition": "Defective items only after 15 days", "refund": "Full refund within 15 days, replacement after"},
+}
 
-_INLINE_FUNCTION_NAMES = set()
+PRODUCTS = {
+    "PROD-001": {"name": "Wireless Headphones", "price": 79.99, "category": "audio", "description": "Noise-cancelling Bluetooth headphones with 30h battery life", "warranty_months": 12},
+    "PROD-002": {"name": "Smart Watch", "price": 249.99, "category": "electronics", "description": "Fitness tracker with heart rate monitor, GPS, and 5-day battery", "warranty_months": 24},
+    "PROD-003": {"name": "Laptop Stand", "price": 39.99, "category": "accessories", "description": "Adjustable aluminum laptop stand for ergonomic desk setup", "warranty_months": 6},
+    "PROD-004": {"name": "USB-C Hub", "price": 54.99, "category": "accessories", "description": "7-in-1 USB-C hub with HDMI, USB-A, SD card reader, and ethernet", "warranty_months": 12},
+    "PROD-005": {"name": "Mechanical Keyboard", "price": 129.99, "category": "electronics", "description": "RGB mechanical keyboard with Cherry MX switches", "warranty_months": 24},
+}
 
-# Define a simple function tool
 @tool
-def add_numbers(a: int, b: int) -> int:
-    """Return the sum of two numbers"""
-    return a+b
-tools.append(add_numbers)
+def get_return_policy(product_category: str) -> str:
+    """Get return policy information for a specific product category.
 
+    Args:
+        product_category: Product category (e.g., 'electronics', 'accessories', 'audio')
 
+    Returns:
+        Formatted return policy details including timeframes and conditions
+    """
+    category = product_category.lower()
+    if category in RETURN_POLICIES:
+        policy = RETURN_POLICIES[category]
+        return f"Return policy for {category}: Window: {policy['window']}, Condition: {policy['condition']}, Refund: {policy['refund']}"
+    return f"No specific return policy found for '{product_category}'. Please contact support for details."
 
-# Add MCP client to tools if available
+@tool
+def get_product_info(query: str) -> str:
+    """Search for product information by name, ID, or keyword.
+
+    Args:
+        query: Product name, ID (e.g., 'PROD-001'), or search keyword
+
+    Returns:
+        Product details including name, price, category, and description
+    """
+    query_lower = query.lower()
+    # Search by ID
+    if query.upper() in PRODUCTS:
+        p = PRODUCTS[query.upper()]
+        return f"{p['name']} ({query.upper()}): ${p['price']}, Category: {p['category']}, {p['description']}, Warranty: {p['warranty_months']} months"
+    # Search by keyword
+    results = [f"{pid}: {p['name']} - ${p['price']} - {p['description']}" for pid, p in PRODUCTS.items()
+               if query_lower in p['name'].lower() or query_lower in p['description'].lower() or query_lower in p['category'].lower()]
+    if results:
+        return "Found products:\n" + "\n".join(results)
+    return f"No products found matching '{query}'."
+
+tools = [get_return_policy, get_product_info]
+
+# Add MCP client (Exa AI web search) to tools
 for mcp_client in mcp_clients:
     if mcp_client:
         tools.append(mcp_client)
 
+# --- Agent Setup ---
 
-def _make_conversation_manager():
-    return NullConversationManager()
+_agent = None
 
-# Reuses one Agent per session_id so each session keeps its own in-process
-# conversation history (best-effort; resets on cold start). The cache is bounded
-# to 128 sessions with LRU eviction (least-recently-used is dropped and its
-# history reset) so a single process serving many sessions cannot leak history
-# between them or grow without limit. For durable history, attach a session manager.
-def agent_factory():
-    cache = OrderedDict()
-    def get_or_create_agent(session_id):
-        if session_id in cache:
-            cache.move_to_end(session_id)
-            return cache[session_id]
-        if len(cache) >= 128:
-            cache.popitem(last=False)
-        cache[session_id] = Agent(
+def get_or_create_agent(session_id, user_id):
+    global _agent
+    if _agent is None:
+        _agent = Agent(
             model=load_model(),
-            system_prompt=DEFAULT_SYSTEM_PROMPT,
-            tools=tools,
-            conversation_manager=_make_conversation_manager(),
-            hooks=[
-            ],
+            session_manager=get_memory_session_manager(session_id, user_id),
+            system_prompt=SYSTEM_PROMPT,
+            tools=tools
         )
-        return cache[session_id]
-    return get_or_create_agent
-get_or_create_agent = agent_factory()
-
-
-def strip_trailing_tool_use(messages: Any) -> list[dict]:
-    """Strip toolUse blocks from the tail until the last message has none."""
-    if not isinstance(messages, list):
-        raise ValueError("messages must be a list")
-
-    messages = list(messages)
-    while messages:
-        last = messages[-1]
-        if not isinstance(last, dict):
-            raise ValueError("each message must be an object")
-        original_content = last.get("content", [])
-        if not isinstance(original_content, list) or not all(isinstance(block, dict) for block in original_content):
-            raise ValueError("each message content value must be a list of content blocks")
-
-        content = [block for block in original_content if "toolUse" not in block]
-        if len(content) == len(original_content):
-            break
-        if content:
-            messages[-1] = {**last, "content": content}
-            break
-        messages.pop()
-
-    return messages
-
-
-def _extract_prompt(payload: dict):
-    """Accept validated harness messages, tool results, or a plain prompt string."""
-    if not isinstance(payload, dict):
-        raise ValueError("payload must be a JSON object")
-    if "messages" in payload:
-        return strip_trailing_tool_use(payload["messages"])
-    if "tool_results" in payload:
-        tool_results = payload["tool_results"]
-        if not isinstance(tool_results, list) or not all(
-            isinstance(tool_result, dict) and isinstance(tool_result.get("toolUseId"), str)
-            for tool_result in tool_results
-        ):
-            raise ValueError("tool_results must contain objects with a toolUseId string")
-        return [{"role": "user", "content": [{"toolResult": {
-            "toolUseId": tr["toolUseId"],
-            "status": tr.get("status", "success"),
-            "content": tr.get("content", []),
-        }} for tr in tool_results]}]
-    prompt = payload.get("prompt", "")
-    if not isinstance(prompt, str):
-        raise ValueError("prompt must be a string")
-    return prompt
-
-
-def _has_inline_function_call(messages) -> bool:
-    """Return True if messages contains an assistant toolUse for an inline function tool."""
-    if not _INLINE_FUNCTION_NAMES or not isinstance(messages, list):
-        return False
-    for msg in messages:
-        if msg.get("role") == "assistant":
-            for block in msg.get("content", []):
-                if isinstance(block, dict) and block.get("toolUse", {}).get("name") in _INLINE_FUNCTION_NAMES:
-                    return True
-    return False
-
-
-def _is_inline_function_call(event: dict) -> bool:
-    """Check if a contentBlockStart event is for an inline function tool."""
-    if not _INLINE_FUNCTION_NAMES:
-        return False
-    cbs = event.get("contentBlockStart", {})
-    start = cbs.get("start", {})
-    tool_use = start.get("toolUse") if isinstance(start, dict) else None
-    return tool_use is not None and tool_use.get("name") in _INLINE_FUNCTION_NAMES
-
+    return _agent
 
 
 @app.entrypoint
 async def invoke(payload, context):
     log.info("Invoking Agent.....")
 
+    session_id = context.session_id
+    user_id = context.request_headers['x-amzn-bedrock-agentcore-runtime-custom-user-id']
 
-    session_id = getattr(context, 'session_id', 'default-session')
-    agent = get_or_create_agent(session_id)
+    if not session_id or not user_id:
+        raise ValueError("session_id and user_id are required. Pass --session-id and --user-id when invoking.")
 
-    prompt = _extract_prompt(payload)
-
-
-    async for event in agent.stream_async(
-        prompt,
-    ):
-        if not isinstance(event, dict) or "event" not in event:
-            continue
-        cbs = event["event"].get("contentBlockStart")
-        if cbs is not None and not cbs.get("start"):
-            continue
-        yield event
+    agent = get_or_create_agent(session_id, user_id)
+    stream = agent.stream_async(payload.get("prompt"))
+    async for event in stream:
+        if "data" in event and isinstance(event["data"], str):
+            yield event["data"]
 
 
 if __name__ == "__main__":
