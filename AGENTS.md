@@ -35,21 +35,23 @@ file maps to a JSON config file and includes validation constraints as comments 
 
 ### Key Types
 
-- **AgentCoreProjectSpec**: Root config with runtimes, memories, knowledge bases, credentials, evaluators, online evals and insights, gateways, policy engines, config bundles, A/B tests, harness registrations, datasets, payment managers, and capacity providers
-- **AgentEnvSpec**: Agent configuration (build type, entrypoint, code location, runtime version, network mode)
-- **Memory**: Memory resource with strategies (SEMANTIC, SUMMARIZATION, USER_PREFERENCE, EPISODIC) and expiry
-- **Credential**: API key or OAuth credential provider
-- **AgentCoreGateway**: MCP gateway with targets (Lambda, MCP server, OpenAPI, Smithy, API Gateway, web-search, knowledge-base)
-- **Evaluator**: LLM-as-a-Judge or code-based evaluator
-- **OnlineEvalConfig**: Continuous evaluation pipeline bound to an agent
-- **OnlineInsightsConfig** _[preview]_: Continuous failure-pattern analysis bound to an agent
-- **KnowledgeBase**: Managed Bedrock Knowledge Base auto-wired to a gateway
-- **Harness**: Declarative agent — runtime + tools + skills + memory + observability without writing agent code
-- **PolicyEngine** + **Policy**: Cedar policy engine with form-based guardrails (Bedrock content filters, prompt-attack, sensitive-info) or raw Cedar policies
-- **PaymentManager** + **PaymentConnector**: x402-protocol payment orchestration with provider credentials (CoinbaseCDP, StripePrivy)
-- **ConfigBundle**: Versioned runtime configuration as a separately-deployable resource
-- **Dataset**: Curated session dataset for batch evaluation and recommendation runs
-- **RuntimeEndpoint**: Named endpoint (e.g. `PROMPT_V1`) targeting a specific runtime version
+| Type | Purpose |
+| --- | --- |
+| **AgentCoreProjectSpec** | Root config with runtimes, memories, knowledge bases, credentials, evaluators, online evals and insights, gateways, policy engines, config bundles, A/B tests, harness registrations, datasets, payment managers, and capacity providers. |
+| **AgentEnvSpec** | Agent configuration: build type, entrypoint, code location, runtime version, and network mode. |
+| **Memory** | Memory resource with strategies (`SEMANTIC`, `SUMMARIZATION`, `USER_PREFERENCE`, `EPISODIC`) and expiry. |
+| **Credential** | API key or OAuth credential provider. |
+| **AgentCoreGateway** | MCP gateway with Lambda, MCP server, OpenAPI, Smithy, API Gateway, web-search, or knowledge-base targets. |
+| **Evaluator** | LLM-as-a-Judge or code-based evaluator. |
+| **OnlineEvalConfig** | Continuous evaluation pipeline bound to an agent. |
+| **OnlineInsightsConfig** *[preview]* | Continuous failure-pattern analysis bound to an agent. |
+| **KnowledgeBase** | Managed Bedrock Knowledge Base auto-wired to a gateway. |
+| **Harness** | Declarative agent: runtime, tools, skills, memory, and observability without writing agent code. |
+| **PolicyEngine** + **Policy** | Cedar policy engine with form-based guardrails (Bedrock content filters, prompt-attack, sensitive-info) or raw Cedar policies. |
+| **PaymentManager** + **PaymentConnector** | x402-protocol payment orchestration with provider credentials (CoinbaseCDP, StripePrivy). |
+| **ConfigBundle** | Versioned runtime configuration as a separately deployable resource. |
+| **Dataset** | Curated session dataset for batch evaluation and recommendation runs. |
+| **RuntimeEndpoint** | Named endpoint, such as `PROMPT_V1`, targeting a specific runtime version. |
 
 ### Supported Frameworks (for template agents)
 
