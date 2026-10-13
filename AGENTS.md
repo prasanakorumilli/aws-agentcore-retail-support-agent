@@ -5,27 +5,6 @@ This project contains configuration and infrastructure for an Amazon Bedrock Age
 The `agentcore/` directory is a declarative model of the project. The `agentcore/cdk/` subdirectory uses the
 `@aws/agentcore-cdk` L3 constructs to deploy the configuration to AWS.
 
-## Mental Model
-
-The project uses a **flat resource model**. Agents, memories, credentials, gateways, evaluators, and policies are
-independent top-level arrays in `agentcore.json`. There is no binding between resources in the schema — each resource is
-provisioned independently. Agents discover memories and credentials at runtime via environment variables or SDK calls.
-Tags defined in `agentcore.json` flow through to deployed CloudFormation resources.
-
-## Critical Invariants
-
-1. **Schema-First Authority:** The `.json` files are the source of truth. Do not modify agent behavior by editing
-   generated CDK code in `cdk/`.
-2. **Resource Identity:** The `name` field determines the CloudFormation Logical ID.
-   - **Renaming** a resource will **destroy and recreate** it.
-   - **Modifying** other fields will update the resource **in-place**.
-3. **Schema Validation:** If your JSON conforms to the types in `.llm-context/`, it will deploy successfully. Run
-   `agentcore validate` to check.
-4. **Resource Removal:** Use `agentcore remove` to remove resources. Run `agentcore deploy` after removal to tear down
-   deployed infrastructure.
-5. **Invocation Input:** Validate runtime payloads and require text prompts to be strings. If a Strands app accepts a
-   caller-supplied message history, normalize the history tail with `strip_trailing_tool_use()` before invocation.
-
 ## Directory Structure
 
 ```
@@ -71,25 +50,6 @@ file maps to a JSON config file and includes validation constraints as comments 
 - **ConfigBundle**: Versioned runtime configuration as a separately-deployable resource
 - **Dataset**: Curated session dataset for batch evaluation and recommendation runs
 - **RuntimeEndpoint**: Named endpoint (e.g. `PROMPT_V1`) targeting a specific runtime version
-
-### Common Enum Values
-
-- **BuildType**: `'CodeZip'` | `'Container'`
-- **NetworkMode**: `'PUBLIC'` | `'VPC'`
-- **RuntimeVersion**: `'PYTHON_3_10'` | `'PYTHON_3_11'` | `'PYTHON_3_12'` | `'PYTHON_3_13'` | `'PYTHON_3_14'` | `'NODE_18'` | `'NODE_20'` | `'NODE_22'`
-- **MemoryStrategyType**: `'SEMANTIC'` | `'SUMMARIZATION'` | `'USER_PREFERENCE'` | `'EPISODIC'`
-- **GatewayTargetType**: `'lambda'` | `'mcpServer'` | `'openApiSchema'` | `'smithyModel'` | `'apiGateway'` | `'lambdaFunctionArn'` | `'connector'` (web-search, bedrock-knowledge-bases)
-- **ModelProvider**: `'Bedrock'` | `'Gemini'` | `'OpenAI'` | `'Anthropic'`
-- **PaymentProvider**: `'CoinbaseCDP'` | `'StripePrivy'`
-- **PolicyEnforcementMode**: `'ACTIVE'` | `'PASSIVE'`
-- **GuardrailContentFilter**: `'VIOLENCE'` | `'HATE'` | `'SEXUAL'` | `'MISCONDUCT'` | `'INSULTS'`
-
-### Build Types
-
-- **CodeZip**: Python source packaged as a zip and deployed directly to AgentCore Runtime.
-- **Container**: Docker image built in CodeBuild (ARM64), pushed to a per-agent ECR repository. Requires a `Dockerfile`
-  in the agent's `codeLocation` directory. For local development (`agentcore dev`), the container is built and run
-  locally with volume-mounted hot-reload.
 
 ### Supported Frameworks (for template agents)
 

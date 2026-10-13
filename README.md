@@ -32,6 +32,10 @@ Strands retail-support agent ──► Amazon Bedrock model
 Streaming response
 ```
 
+![RetailCustomerSupport architecture: a Strands agent uses local tools, Exa MCP tools, and Amazon Bedrock.](docs/images/architecture-local.png)
+
+*Initial local architecture: the agent uses local return-policy and product-information tools, Exa MCP tools, and an Amazon Bedrock model.*
+
 ## What this project demonstrates
 
 - A Strands agent hosted by Amazon Bedrock AgentCore Runtime.
@@ -86,9 +90,11 @@ RetailCustomerSupport/
     └── model/load.py                  # Bedrock model configuration
 ```
 
-## 1. Scaffold RetailCustomerSupport locally
+## Hands-on implementation
 
-The first hands-on activity uses the AgentCore CLI to scaffold a Python Strands application backed by Amazon Bedrock. The equivalent non-interactive command is:
+### 1. Create an AgentCore agent
+
+Create the `RetailCustomerSupport` agent with the AgentCore CLI:
 
 ```bash
 agentcore create \
@@ -98,102 +104,141 @@ agentcore create \
   --memory none
 ```
 
-The CLI creates the application skeleton, `agentcore/` project configuration, a local Python environment, and the deployment infrastructure. This repository is the resulting project after the customizations described below.
+The CLI creates the Strands application skeleton, `agentcore/` configuration, local Python environment, and CDK deployment project.
 
-## 2. Add customer-support tools and MCP web search
+![AgentCore CLI confirms creation of the RetailCustomerSupport project and its Python Strands agent.](docs/images/agentcore-project-created.png)
 
-In `app/RetailCustomerSupport/main.py`, the agent is given two local tools:
+*AgentCore CLI scaffolding completed for `RetailCustomerSupport`.*
 
-| Tool | Purpose |
-| --- | --- |
-| `get_product_info` | Searches the demo product catalog by ID, name, category, or keyword. |
-| `get_return_policy` | Returns the policy for audio, electronics, or accessories. |
+### 2. Customize the agent with tools and MCP
 
-The agent also adds the MCP client from `mcp_client/client.py`. It connects to Exa's streamable HTTP MCP endpoint, allowing the model to search the web when a question needs information outside the local demo catalog.
+[`main.py`](app/RetailCustomerSupport/main.py) defines two local `@tool` functions and registers an Exa streamable HTTP MCP client. The local tools ground retail answers in the demo catalog and return-policy data; MCP extends the agent with web search for broader questions.
 
-After installing dependencies, run the agent locally from the project root:
+```python
+@tool
+def get_return_policy(product_category: str) -> str:
+    """Get return-policy details for a product category."""
 
-```bash
-cd RetailCustomerSupport
-agentcore dev
+@tool
+def get_product_info(query: str) -> str:
+    """Search the demo catalog by product ID, name, or keyword."""
+
+tools = [get_return_policy, get_product_info]
+for mcp_client in mcp_clients:
+    if mcp_client:
+        tools.append(mcp_client)
 ```
 
-To send a prompt to the local runtime from the CLI, pass the custom user ID as a header:
+The MCP client is created in [`mcp_client/client.py`](app/RetailCustomerSupport/mcp_client/client.py) and connects to Exa's streamable HTTP MCP endpoint.
 
-```bash
-agentcore dev \
-  --header "X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id: customer-123" \
-  "What is the return policy for wireless headphones?"
+### 3. Pin the Amazon Bedrock model
+
+[`model/load.py`](app/RetailCustomerSupport/model/load.py) pins the model used by the agent:
+
+```python
+return BedrockModel(model_id="global.anthropic.claude-sonnet-4-6")
 ```
 
-Try product lookup as well:
+The initial creation screenshot shows the workshop's Claude Sonnet 4.5 default. The checked-in implementation currently uses the global Claude Sonnet 4.6 model ID shown above.
+
+### 4. Start and test the local development server
+
+Run the local AgentCore development server without opening the browser interface:
 
 ```bash
-agentcore dev \
-  --header "X-Amzn-Bedrock-AgentCore-Runtime-Custom-User-Id: customer-123" \
-  "Tell me about PROD-002"
+agentcore dev --no-browser
 ```
 
-## 3. Deploy the runtime to AWS
+Use the terminal UI to test return-policy and product-information questions before deploying.
 
-Review the deployment target in `agentcore/aws-targets.json`, then validate and deploy from the project root:
+![Local AgentCore dev server answers return-policy and product-information questions.](docs/images/local-tool-validation.png)
+
+*Local validation of the return-policy and product-information tools.*
+
+### 5. Deploy the agent to AWS
+
+Review `agentcore/aws-targets.json`, then deploy the CodeZip runtime:
 
 ```bash
-agentcore validate
 agentcore deploy
-agentcore status
 ```
 
-The CLI synthesizes and deploys the AgentCore resources needed for the configured CodeZip runtime. Once deployment completes, invoke the deployed runtime with a session and user ID:
+![AgentCore CLI confirms deployment of RetailCustomerSupport to AWS.](docs/images/deployment-success.png)
+
+*AgentCore deployment completed successfully. The account-specific target value is redacted.*
+
+### 6. Add AgentCore Memory
+
+Add a shared memory resource with semantic-fact and conversation-summary strategies. The 30-day expiry controls retention of short-term memory events.
 
 ```bash
-agentcore invoke \
-  --session-id deployed-demo-001 \
-  --user-id customer-123 \
-  "What is the return policy for a smart watch?"
+agentcore add memory \
+  --name SharedMemory \
+  --strategies SEMANTIC,SUMMARIZATION \
+  --expiry 30
 ```
 
-## 4. Add and wire AgentCore Memory
+![RetailCustomerSupport architecture after AgentCore Memory is added.](docs/images/architecture-with-memory.png)
 
-The memory hands-on activity distinguishes between session persistence and durable memory:
+*Expanded architecture: AgentCore Memory adds retrieval of customer facts and prior-session context alongside the runtime, model, local tools, and MCP server.*
 
-- **Short-term memory** keeps raw conversation events for a session.
-- **Semantic memory** extracts customer facts that can be retrieved across sessions.
-- **Summarization memory** stores compressed conversation context for continuity.
+### 7. Review the generated memory configuration
 
-This project declares a `SharedMemory` resource in `agentcore/agentcore.json` with a 30-day event expiry and two long-term strategies:
+The CLI adds a `SharedMemory` declaration to [`agentcore/agentcore.json`](agentcore/agentcore.json), with semantic facts and session summaries stored under these namespaces:
 
 ```text
 /users/{actorId}/facts                 semantic customer facts
 /summaries/{actorId}/{sessionId}       conversation summaries
 ```
 
-`app/RetailCustomerSupport/memory/session.py` reads the deployed memory ID from `MEMORY_SHAREDMEMORY_ID`, creates an `AgentCoreMemorySessionManager`, and attaches it to the Strands agent. The runtime uses the AgentCore session ID and custom user ID as the session and actor identity.
+![AgentCore configuration showing the SharedMemory resource with semantic and summarization strategies.](docs/images/memory-configuration.png)
 
-Deploy the configuration change after adding memory:
+*Memory configuration declared in `agentcore.json`.*
 
-```bash
-agentcore validate
-agentcore deploy
+### 8. Wire memory to the agent code
+
+[`memory/session.py`](app/RetailCustomerSupport/memory/session.py) reads the deployed memory ID, configures retrieval namespaces, and returns an `AgentCoreMemorySessionManager`. [`main.py`](app/RetailCustomerSupport/main.py) passes that session manager when creating the Strands agent:
+
+```python
+Agent(
+    model=load_model(),
+    session_manager=get_memory_session_manager(session_id, user_id),
+    system_prompt=SYSTEM_PROMPT,
+    tools=tools,
+)
 ```
 
-### Validate memory across sessions
+### 9. Deploy the memory-enabled agent and validate recall
 
-Use the same user ID, but a new session ID for the second request. That confirms the returned fact comes from durable AgentCore Memory rather than only the live session context.
+Deploy the updated configuration with automatic confirmation and verbose resource events:
 
 ```bash
-# Store a customer fact.
-agentcore invoke \
-  --session-id memory-test-1 \
-  --user-id customer-123 \
-  "My name is Alex and I prefer audio products."
-
-# Retrieve it from a different session.
-agentcore invoke \
-  --session-id memory-test-2 \
-  --user-id customer-123 \
-  "What do you remember about me?"
+agentcore deploy -y -v
 ```
+
+![Verbose AgentCore deployment output showing creation of the SharedMemory resource and update of the runtime.](docs/images/agentcore-memory-deployment.png)
+
+*Verbose deployment output confirms that AgentCore provisions the memory resource and updates the runtime.*
+
+Check the deployed runtime and memory resource status:
+
+```bash
+agentcore status
+```
+
+![AgentCore status showing the RetailCustomerSupport runtime and SharedMemory resource deployed.](docs/images/agentcore-status-after-adding-memory.png)
+
+*AgentCore status confirms that both the runtime and `SharedMemory` are deployed.*
+
+![Amazon Bedrock AgentCore console showing the active SharedMemory resource and its semantic and summarization strategies.](docs/images/memory-console.png)
+
+*AgentCore console confirmation that the deployed memory resource is active with both long-term memory strategies.*
+
+To validate durable memory, invoke the agent in a second session with the same user ID. The second session retrieves facts established in the first, proving recall comes from AgentCore Memory rather than only the in-process conversation context.
+
+![A second AgentCore session retrieves customer facts retained by AgentCore Memory.](docs/images/memory-cross-session-validation.png)
+
+*Cross-session memory validation: the same user ID is recognized in a new session and the agent retrieves retained customer facts.*
 
 ## Security and repository hygiene
 
